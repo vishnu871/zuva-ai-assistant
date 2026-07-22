@@ -1,24 +1,22 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
 
 import ChatButton from "./ChatButton";
 import ChatWindow from "./ChatWindow";
 
 export default function ChatWidget() {
   const [isOpen, setIsOpen] = useState(false);
-  const searchParams = useSearchParams();
+  const [isEmbedded, setIsEmbedded] = useState(false);
 
   useEffect(() => {
-    const isEmbedded = searchParams.get("embed") === "true";
+    const params = new URLSearchParams(window.location.search);
 
-    if (isEmbedded) {
+    if (params.get("embed") === "true") {
+      setIsEmbedded(true);
       setIsOpen(true);
     }
-  }, [searchParams]);
-
-  const isEmbedded = searchParams.get("embed") === "true";
+  }, []);
 
   return (
     <>
