@@ -1,22 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 
 import ChatButton from "./ChatButton";
 import ChatWindow from "./ChatWindow";
 
 export default function ChatWidget() {
-  const [isOpen, setIsOpen] = useState(false);
-  const [isEmbedded, setIsEmbedded] = useState(false);
+  const isEmbedded = useMemo(() => {
+    if (typeof window === "undefined") return false;
 
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-
-    if (params.get("embed") === "true") {
-      setIsEmbedded(true);
-      setIsOpen(true);
-    }
+    return new URLSearchParams(window.location.search).get("embed") === "true";
   }, []);
+
+  const [isOpen, setIsOpen] = useState(isEmbedded);
 
   return (
     <>
@@ -29,10 +25,8 @@ export default function ChatWidget() {
         }}
       />
 
-      {!isOpen && !isEmbedded && (
-        <ChatButton
-          onClick={() => setIsOpen(true)}
-        />
+      {!isEmbedded && !isOpen && (
+        <ChatButton onClick={() => setIsOpen(true)} />
       )}
     </>
   );
