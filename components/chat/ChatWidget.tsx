@@ -18,15 +18,13 @@ export default function ChatWidget() {
     <>
       <ChatWindow
         isOpen={isOpen}
-        onClose={() => {
-          if (!isEmbedded) {
-            setIsOpen(false);
-          }
-        }}
+        onClose={() => setIsOpen(false)}
       />
 
       {!isEmbedded && !isOpen && (
-        <ChatButton onClick={() => setIsOpen(true)} />
+        <ChatButton
+          onClick={() => setIsOpen(true)}
+        />
       )}
     </>
   );
