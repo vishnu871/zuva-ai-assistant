@@ -8,6 +8,19 @@ interface ChatMessage {
   content: string;
 }
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 200,
+    headers: corsHeaders,
+  });
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
@@ -18,7 +31,10 @@ export async function POST(req: Request) {
     if (!message?.trim()) {
       return NextResponse.json(
         { error: "Message is required." },
-        { status: 400 }
+        {
+          status: 400,
+          headers: corsHeaders,
+        }
       );
     }
 
@@ -70,11 +86,16 @@ Instructions:
       },
     });
 
-    return NextResponse.json({
-      message:
-        response.text?.trim() ??
-        "I couldn't generate a response.",
-    });
+    return NextResponse.json(
+      {
+        message:
+          response.text?.trim() ??
+          "I couldn't generate a response.",
+      },
+      {
+        headers: corsHeaders,
+      }
+    );
   } catch (error: unknown) {
     console.error("========== CHAT API ERROR ==========");
     console.error(error);
@@ -89,6 +110,7 @@ Instructions:
       },
       {
         status: 500,
+        headers: corsHeaders,
       }
     );
   }
