@@ -22,6 +22,14 @@ interface Message {
   text: string;
 }
 
+const GENERATING_MESSAGES = [
+  "Generating your insight",
+  "Connecting the relevant dots",
+  "Curating the details for you",
+  "Shaping a thoughtful response",
+  "Almost there — putting it all together",
+];
+
 export default function ChatWindow({
   isOpen,
   onClose,
@@ -29,6 +37,9 @@ export default function ChatWindow({
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [typing, setTyping] = useState(false);
+  const [generatingMessage, setGeneratingMessage] = useState(
+    GENERATING_MESSAGES[0]
+  );
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -43,7 +54,36 @@ export default function ChatWindow({
     messagesEndRef.current?.scrollIntoView({
       behavior: "smooth",
     });
-  }, [messages, typing]);
+  }, [messages, typing, generatingMessage]);
+
+  useEffect(() => {
+    if (!typing) {
+      setGeneratingMessage(GENERATING_MESSAGES[0]);
+      return;
+    }
+
+    const timers = [
+      window.setTimeout(() => {
+        setGeneratingMessage(GENERATING_MESSAGES[1]);
+      }, 5000),
+
+      window.setTimeout(() => {
+        setGeneratingMessage(GENERATING_MESSAGES[2]);
+      }, 10000),
+
+      window.setTimeout(() => {
+        setGeneratingMessage(GENERATING_MESSAGES[3]);
+      }, 15000),
+
+      window.setTimeout(() => {
+        setGeneratingMessage(GENERATING_MESSAGES[4]);
+      }, 20000),
+    ];
+
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [typing]);
 
   async function handleSendMessage(text?: string) {
     const content = (text ?? input).trim();
@@ -59,6 +99,7 @@ export default function ChatWindow({
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setTyping(true);
+    setGeneratingMessage(GENERATING_MESSAGES[0]);
 
     try {
       const response = await sendMessage(content);
@@ -157,7 +198,9 @@ export default function ChatWindow({
                   />
                 ))}
 
-                {typing && <TypingIndicator />}
+                {typing && (
+                  <TypingIndicator message={generatingMessage} />
+                )}
 
                 <div ref={messagesEndRef} />
               </>
