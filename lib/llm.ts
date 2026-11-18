@@ -3,7 +3,7 @@ import { ThinkingLevel } from "@google/genai";
 
 const GEMINI_MODEL =
   process.env.GEMINI_MODEL ??
-  "gemini-3.8-flash";
+  "gemini-3.5-flash-lite";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
