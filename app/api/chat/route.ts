@@ -482,6 +482,7 @@
 
 
 
+
 import { NextResponse } from "next/server";
 
 import { SYSTEM_PROMPT } from "@/lib/prompts";
@@ -547,14 +548,7 @@ function isTransientError(error: unknown): boolean {
   const status = getErrorStatus(error);
   const message = getErrorMessage(error).toLowerCase();
 
-  if (
-    status === 408 ||
-    status === 429 ||
-    status === 500 ||
-    status === 502 ||
-    status === 503 ||
-    status === 504
-  ) {
+  if ([408, 429, 500, 502, 503, 504].includes(status ?? 0)) {
     return true;
   }
 
@@ -583,15 +577,15 @@ function formatUpcomingEvents(
 ): string {
   if (events.length === 0) {
     return (
-      "I couldn't verify any upcoming Zuva Life workshops or experiences " +
-      "with confirmed future dates on the current website. " +
-      "Some experiences may still be listed on the website, but without " +
-      "a verifiable future date I won't describe them as upcoming."
+      "I couldn't find any confirmed upcoming Zuva Life workshops or experiences " +
+      "with verified future dates at the moment. Some experiences may still be " +
+      "featured on the website, but I won't list them as upcoming without a " +
+      "confirmed event date. Please check the Zuva Life website for future announcements."
     );
   }
 
   const lines = [
-    "Here are the Zuva Life workshops and experiences with verified future dates:",
+    "Here are the Zuva Life workshops and experiences with verified upcoming dates:",
     "",
   ];
 
@@ -664,20 +658,19 @@ export async function POST(req: Request) {
     const useLiveWebsite = shouldUseLiveWebsite(message);
 
     /*
-     * ============================================================
      * CURRENT EVENT QUESTIONS
-     * ============================================================
      *
-     * Do not use the stable knowledge base or Gemini to decide
-     * whether an event is upcoming.
+     * This branch intentionally bypasses:
+     * - Stable knowledge retrieval
+     * - Conversation history
+     * - Gemini generation
      *
-     * The website reader returns only records that passed its
-     * date-validation rules.
+     * Only verified event records can appear in this response.
      */
 
     if (currentEventQuery) {
       console.log(
-        `[Milo API] ${requestId} — verified event retrieval started.`
+        `[Milo API] ${requestId} — deterministic event retrieval started.`
       );
 
       const upcomingEvents =
@@ -700,17 +693,13 @@ export async function POST(req: Request) {
     }
 
     /*
-     * ============================================================
      * STABLE ZUVA KNOWLEDGE
-     * ============================================================
      */
 
     const relevantKnowledge = searchKnowledge(message);
 
     /*
-     * ============================================================
      * OTHER LIVE WEBSITE QUESTIONS
-     * ============================================================
      */
 
     let liveWebsiteContext = "";
@@ -741,15 +730,6 @@ export async function POST(req: Request) {
           `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`
       )
       .join("\n");
-
-    /*
-     * ============================================================
-     * GEMINI PROMPT
-     * ============================================================
-     *
-     * Gemini remains responsible for normal conversations and
-     * stable Zuva Life information.
-     */
 
     const prompt = `
 ${SYSTEM_PROMPT}
@@ -791,9 +771,9 @@ RESPONSE RULES
 1. Answer the actual question directly.
 2. Use live website information for current website details.
 3. Use stable Zuva knowledge for established Zuva Life information.
-4. Do not invent facts, services, prices, dates, or links.
-5. Do not present an event as upcoming unless its future date
-   has been verified by the event retrieval system.
+4. Do not invent facts, services, prices, dates, venues, or links.
+5. Do not present an event as upcoming unless its future event date
+   has been verified.
 6. Do not use old event descriptions as proof of future availability.
 7. Never construct or guess a Zuva Life URL.
 8. If the information is unavailable, say so clearly.

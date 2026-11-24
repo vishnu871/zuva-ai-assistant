@@ -1522,14 +1522,15 @@
 
 
 
+
 const ZUVA_BASE_URL = "https://www.zuva.life";
 const ZUVA_ORIGIN = new URL(ZUVA_BASE_URL).origin;
 
-const CACHE_TTL_MS = 60 * 1000;
+const CACHE_TTL_MS = 30 * 1000;
 const FETCH_TIMEOUT_MS = 10000;
-
 const MAX_CRAWL_PAGES = 35;
 const MAX_LINKS_PER_PAGE = 120;
+const MAX_PAGE_LENGTH = 12000;
 
 interface WebsiteLink {
   url: string;
@@ -1542,13 +1543,11 @@ interface WebsitePage {
   title: string;
   text: string;
   links: WebsiteLink[];
-  structuredDates: string[];
 }
 
 interface WebsiteCache {
   query: string;
   content: string;
-  events: EventRecord[];
   fetchedAt: number;
 }
 
@@ -1563,16 +1562,11 @@ export interface EventRecord {
   description: string;
 }
 
-interface CrawlResult {
-  content: string;
-  events: EventRecord[];
-}
-
 let websiteCache: WebsiteCache | null = null;
 
-/* ============================================================
-   QUERY CLASSIFICATION
-============================================================ */
+const KNOWN_UPCOMING_EVENT_URLS = [
+  `${ZUVA_BASE_URL}/rethinking-work-in-midlife`,
+];
 
 const STABLE_QUERY_PATTERNS = [
   /\bwhat are the four dimensions\b/i,
@@ -1580,55 +1574,53 @@ const STABLE_QUERY_PATTERNS = [
   /\bwhat is spark experiences?\b/i,
   /\bwhat are spark experiences\b/i,
   /\btell me about spark experiences\b/i,
-
   /\bwhat is purpose pathways\b/i,
   /\bwhat are purpose pathways\b/i,
   /\btell me about purpose pathways\b/i,
-
   /\bwhat is discovery journey\b/i,
   /\bwhat is the discovery journey\b/i,
   /\btell me about discovery journey\b/i,
-
   /\bwhat is zest circle\b/i,
   /\btell me about zest circle\b/i,
-
   /\bwhat is zuva life\b/i,
   /\btell me about zuva life\b/i,
   /\bwhat does zuva life do\b/i,
   /\bwhat does zuva offer\b/i,
   /\bwhat are zuva life offerings\b/i,
   /\bwhat are the offerings\b/i,
-
   /\bhow does discovery work\b/i,
   /\bhow does zest circle work\b/i,
   /\bhow do purpose pathways work\b/i,
 ];
 
 const CURRENT_EVENT_PATTERNS = [
-  /\bupcoming\b.{0,60}\b(events?|workshops?|sessions?|experiences?|retreats?)\b/i,
-  /\b(current|latest)\b.{0,60}\b(events?|workshops?|sessions?|experiences?|retreats?)\b/i,
-
+  /\bupcoming events?\b/i,
+  /\bupcoming workshops?\b/i,
+  /\bupcoming sessions?\b/i,
+  /\bupcoming experiences?\b/i,
+  /\bupcoming retreats?\b/i,
+  /\bcurrent events?\b/i,
+  /\bcurrent workshops?\b/i,
+  /\bcurrent sessions?\b/i,
+  /\bcurrent experiences?\b/i,
+  /\bcurrent retreats?\b/i,
   /\bnext\b.{0,60}\b(events?|workshops?|sessions?|experiences?|retreats?)\b/i,
-
   /\bwhat(?:'s| is)\s+(?:the\s+)?next\b.{0,60}\b(events?|workshops?|sessions?|experiences?|retreats?)\b/i,
-
-  /\bwhat (?:events?|workshops?|sessions?|experiences?|retreats?)\b/i,
-
+  /\bwhat events\b/i,
+  /\bwhat workshops\b/i,
+  /\bwhat sessions\b/i,
+  /\bwhat experiences are coming\b/i,
+  /\bwhat retreats\b/i,
   /\bwhat can i attend\b/i,
   /\bwhat can i join\b/i,
   /\bwhat can i register\b/i,
-
   /\bwhat(?:'s| is) coming up\b/i,
   /\bwhat is happening\b/i,
-
   /\bretreats? coming up\b/i,
   /\bworkshops? coming up\b/i,
   /\bsessions? coming up\b/i,
   /\bevents? coming up\b/i,
   /\bexperiences? coming up\b/i,
-
-  /\bshow me (?:the )?(?:events?|workshops?|sessions?|experiences?)\b/i,
-  /\blist (?:the )?(?:events?|workshops?|sessions?|experiences?)\b/i,
 ];
 
 const LIVE_QUERY_PATTERNS = [
@@ -1636,78 +1628,35 @@ const LIVE_QUERY_PATTERNS = [
   /\bcurrent\b/i,
   /\bcurrently\b/i,
   /\bwhat(?:'s| is) happening\b/i,
-
   /\bregister\b/i,
   /\bregistration\b/i,
   /\bregistration link\b/i,
   /\bhow do i register\b/i,
-
   /\bavailability\b/i,
   /\bavailable\b/i,
   /\bcan i attend\b/i,
   /\bcan i join\b/i,
-
   /\bthis week\b/i,
   /\bthis month\b/i,
   /\bnext week\b/i,
   /\bnext month\b/i,
   /\bcoming up\b/i,
   /\bcalendar\b/i,
-
   /\bdate\b/i,
   /\bdates\b/i,
   /\bwhen is\b/i,
   /\bwhen are\b/i,
-
   /\bwhere is\b/i,
   /\bwhere are\b/i,
   /\bvenue\b/i,
   /\blocation\b/i,
-
   /\bprice\b/i,
   /\bpricing\b/i,
   /\bcost\b/i,
   /\bfee\b/i,
   /\bfees\b/i,
-
   /\bnext\b.{0,60}\b(events?|workshops?|sessions?|experiences?|retreats?)\b/i,
 ];
-
-export function isCurrentEventQuery(query: string): boolean {
-  const normalizedQuery = query.toLowerCase().trim();
-
-  if (!normalizedQuery) return false;
-
-  return CURRENT_EVENT_PATTERNS.some((pattern) =>
-    pattern.test(normalizedQuery)
-  );
-}
-
-export function shouldUseLiveWebsite(query: string): boolean {
-  const normalizedQuery = query.toLowerCase().trim();
-
-  if (!normalizedQuery) return false;
-
-  if (
-    STABLE_QUERY_PATTERNS.some((pattern) =>
-      pattern.test(normalizedQuery)
-    )
-  ) {
-    return false;
-  }
-
-  if (isCurrentEventQuery(normalizedQuery)) {
-    return true;
-  }
-
-  return LIVE_QUERY_PATTERNS.some((pattern) =>
-    pattern.test(normalizedQuery)
-  );
-}
-
-/* ============================================================
-   TEXT AND HTML HELPERS
-============================================================ */
 
 function normalizeWhitespace(value: string): string {
   return value
@@ -1735,38 +1684,61 @@ function decodeEntities(value: string): string {
 }
 
 function stripHtml(html: string): string {
-  return decodeEntities(
-    html
-      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
-      .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, " ")
-      .replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi, " ")
-      .replace(/<!--[\s\S]*?-->/g, " ")
-      .replace(
-        /<\/?(p|div|section|article|li|h[1-6]|tr|br|main|header|footer|time)[^>]*>/gi,
-        "\n"
-      )
-      .replace(/<li\b[^>]*>/gi, "\n- ")
-      .replace(/<[^>]+>/g, " ")
-  )
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n[ \t]+/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  return normalizeWhitespace(
+    decodeEntities(
+      html
+        .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+        .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+        .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, " ")
+        .replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi, " ")
+        .replace(/<!--[\s\S]*?-->/g, " ")
+        .replace(
+          /<\/?(p|div|section|article|li|h[1-6]|tr|br|main|header|footer|ul|ol)[^>]*>/gi,
+          "\n"
+        )
+        .replace(/<li\b[^>]*>/gi, "\n- ")
+        .replace(/<[^>]+>/g, " ")
+    )
+  );
 }
 
 function extractTitle(html: string): string {
-  const heading = html.match(
-    /<h1\b[^>]*>([\s\S]*?)<\/h1>/i
-  );
+  const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  return match ? normalizeWhitespace(stripHtml(match[1])) : "";
+}
 
-  const title = html.match(
-    /<title\b[^>]*>([\s\S]*?)<\/title>/i
-  );
+function normalizeInternalUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url, ZUVA_BASE_URL);
 
-  return normalizeWhitespace(
-    stripHtml(heading?.[1] || title?.[1] || "")
-  );
+    if (parsed.origin !== ZUVA_ORIGIN) return null;
+
+    const pathname = parsed.pathname.toLowerCase();
+
+    if (
+      pathname.includes("/wp-admin") ||
+      pathname.includes("/wp-login") ||
+      pathname.includes("/feed") ||
+      pathname.includes("/tag/") ||
+      pathname.includes("/category/") ||
+      /\.(jpg|jpeg|png|gif|webp|svg|pdf|zip|css|js|xml|json)$/i.test(
+        pathname
+      )
+    ) {
+      return null;
+    }
+
+    parsed.hash = "";
+    parsed.search = "";
+
+    if (parsed.pathname !== "/") {
+      parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+    }
+
+    return parsed.toString();
+  } catch {
+    return null;
+  }
 }
 
 function extractLinks(html: string): WebsiteLink[] {
@@ -1791,9 +1763,7 @@ function extractLinks(html: string): WebsiteLink[] {
     try {
       const url = new URL(rawHref, ZUVA_BASE_URL);
 
-      if (!["http:", "https:"].includes(url.protocol)) {
-        continue;
-      }
+      if (!["http:", "https:"].includes(url.protocol)) continue;
 
       url.hash = "";
 
@@ -1802,226 +1772,21 @@ function extractLinks(html: string): WebsiteLink[] {
       if (!links.has(normalizedUrl)) {
         links.set(normalizedUrl, {
           url: normalizedUrl,
-          label:
-            normalizeWhitespace(stripHtml(match[4])) || "Link",
+          label: normalizeWhitespace(stripHtml(match[4])) || "Link",
           isExternal: url.origin !== ZUVA_ORIGIN,
         });
       }
 
-      if (links.size >= MAX_LINKS_PER_PAGE) {
-        break;
-      }
+      if (links.size >= MAX_LINKS_PER_PAGE) break;
     } catch {
-      // Ignore malformed URLs.
+      // Ignore malformed links.
     }
   }
 
   return Array.from(links.values());
 }
 
-/* ============================================================
-   STRUCTURED EVENT DATE EXTRACTION
-============================================================ */
-
-function extractStructuredDates(html: string): string[] {
-  const dates = new Set<string>();
-
-  const scripts =
-    html.match(
-      /<script\b[^>]*type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi
-    ) || [];
-
-  function inspect(value: unknown): void {
-    if (Array.isArray(value)) {
-      value.forEach(inspect);
-      return;
-    }
-
-    if (!value || typeof value !== "object") {
-      return;
-    }
-
-    const item = value as Record<string, unknown>;
-    const type = item["@type"];
-
-    const isEvent =
-      type === "Event" ||
-      (Array.isArray(type) && type.includes("Event"));
-
-    if (isEvent) {
-      for (const key of ["startDate", "endDate"]) {
-        const rawDate = item[key];
-
-        if (typeof rawDate === "string") {
-          const match = rawDate.match(
-            /^(\d{4}-\d{2}-\d{2})/
-          );
-
-          if (match && isValidISODate(match[1])) {
-            dates.add(match[1]);
-          }
-        }
-      }
-    }
-
-    Object.values(item).forEach(inspect);
-  }
-
-  for (const script of scripts) {
-    const json = script
-      .replace(/^<script\b[^>]*>/i, "")
-      .replace(/<\/script>$/i, "");
-
-    try {
-      inspect(JSON.parse(json));
-    } catch {
-      // Ignore malformed JSON-LD.
-    }
-  }
-
-  return Array.from(dates).sort();
-}
-
-/* ============================================================
-   URL HELPERS
-============================================================ */
-
-function isExcludedUrl(url: string): boolean {
-  try {
-    const pathname = new URL(url).pathname.toLowerCase();
-
-    return (
-      pathname.includes("/wp-admin") ||
-      pathname.includes("/wp-login") ||
-      pathname.includes("/feed") ||
-      pathname.includes("/tag/") ||
-      pathname.includes("/category/") ||
-      /\.(xml|json|jpg|jpeg|png|gif|webp|svg|pdf|zip|css|js)$/i.test(
-        pathname
-      )
-    );
-  } catch {
-    return true;
-  }
-}
-
-function normalizeInternalUrl(url: string): string | null {
-  try {
-    const parsed = new URL(url, ZUVA_BASE_URL);
-
-    if (parsed.origin !== ZUVA_ORIGIN) return null;
-    if (isExcludedUrl(parsed.toString())) return null;
-
-    parsed.hash = "";
-    parsed.search = "";
-
-    if (parsed.pathname !== "/") {
-      parsed.pathname = parsed.pathname.replace(/\/+$/, "");
-    }
-
-    return parsed.toString();
-  } catch {
-    return null;
-  }
-}
-
-/* ============================================================
-   PAGE RELEVANCE
-============================================================ */
-
-function scorePageUrl(url: string, query: string): number {
-  const pathname = new URL(url).pathname.toLowerCase();
-  const normalizedQuery = query.toLowerCase();
-
-  let score = 0;
-
-  const priorityPaths = [
-    { path: "/our-experiences", score: 100 },
-    { path: "/events", score: 95 },
-    { path: "/upcoming-events", score: 95 },
-    { path: "/experiences", score: 85 },
-    { path: "/spark-experiences", score: 45 },
-    { path: "/zest-circle", score: 45 },
-  ];
-
-  for (const item of priorityPaths) {
-    if (pathname === item.path) {
-      score += item.score;
-    }
-  }
-
-  if (pathname.includes("event")) score += 35;
-  if (pathname.includes("workshop")) score += 35;
-  if (pathname.includes("experience")) score += 25;
-  if (pathname.includes("retreat")) score += 25;
-  if (pathname.includes("zest")) score += 15;
-  if (pathname.includes("spark")) score += 10;
-
-  const queryTerms = normalizedQuery
-    .split(/\s+/)
-    .filter((term) => term.length > 2);
-
-  for (const term of queryTerms) {
-    if (pathname.includes(term)) {
-      score += 5;
-    }
-  }
-
-  return score;
-}
-
-function sortUrlsByRelevance(
-  urls: string[],
-  query: string
-): string[] {
-  return [...new Set(urls)]
-    .map((url) => ({
-      url,
-      score: scorePageUrl(url, query),
-    }))
-    .sort((a, b) => b.score - a.score)
-    .map((item) => item.url);
-}
-
-function isLikelyEventPage(page: WebsitePage): boolean {
-  const combined =
-    `${page.url} ${page.title} ${page.text}`.toLowerCase();
-
-  const signals = [
-    "event",
-    "experience",
-    "retreat",
-    "workshop",
-    "register here",
-    "register now",
-    "reserve your spot",
-    "date & time",
-    "who is it for",
-    "facilitator",
-    "upcoming events",
-  ];
-
-  const matches = signals.filter((signal) =>
-    combined.includes(signal)
-  ).length;
-
-  const path = new URL(page.url).pathname.toLowerCase();
-
-  return (
-    /event|experience|workshop|retreat|zest|midlife|session/.test(
-      path
-    ) ||
-    matches >= 2
-  );
-}
-
-/* ============================================================
-   WEBSITE FETCHING
-============================================================ */
-
-async function fetchPage(
-  url: string
-): Promise<WebsitePage | null> {
+async function fetchPage(url: string): Promise<WebsitePage | null> {
   const controller = new AbortController();
 
   const timeout = setTimeout(
@@ -2044,12 +1809,10 @@ async function fetchPage(
       console.warn(
         `[Milo website reader] ${url} returned HTTP ${response.status}`
       );
-
       return null;
     }
 
-    const contentType =
-      response.headers.get("content-type") ?? "";
+    const contentType = response.headers.get("content-type") ?? "";
 
     if (
       !contentType.includes("text/html") &&
@@ -2059,27 +1822,21 @@ async function fetchPage(
     }
 
     const html = await response.text();
-
-    const title = extractTitle(html);
     const text = normalizeWhitespace(stripHtml(html));
-    const links = extractLinks(html);
-    const structuredDates = extractStructuredDates(html);
 
     if (!text) return null;
 
     return {
       url,
-      title,
+      title: extractTitle(html),
       text,
-      links,
-      structuredDates,
+      links: extractLinks(html),
     };
   } catch (error) {
     console.warn(
       `[Milo website reader] Failed to fetch ${url}:`,
       error instanceof Error ? error.message : String(error)
     );
-
     return null;
   } finally {
     clearTimeout(timeout);
@@ -2094,246 +1851,127 @@ async function fetchPagesInBatches(
 
   for (let index = 0; index < urls.length; index += batchSize) {
     const batch = urls.slice(index, index + batchSize);
-
-    const results = await Promise.all(
-      batch.map((url) => fetchPage(url))
-    );
+    const results = await Promise.all(batch.map(fetchPage));
 
     for (const page of results) {
-      if (page) {
-        pages.push(page);
-      }
+      if (page) pages.push(page);
     }
   }
 
   return pages;
 }
 
-/* ============================================================
-   DATE VALIDATION
-============================================================ */
-
 function getTodayInIndia(): string {
-  return new Intl.DateTimeFormat("en-CA", {
+  const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).format(new Date());
+  }).formatToParts(new Date());
+
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+
+  return `${year}-${month}-${day}`;
 }
 
-function isValidISODate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return false;
+function parseDate(
+  year: number,
+  month: number,
+  day: number
+): string | null {
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
   }
 
-  const date = new Date(`${value}T00:00:00Z`);
-
-  return (
-    !Number.isNaN(date.getTime()) &&
-    date.toISOString().slice(0, 10) === value
-  );
+  return date.toISOString().slice(0, 10);
 }
 
-/**
- * Extract dates that explicitly include a year.
- *
- * Yearless dates are intentionally ignored because assigning the
- * current year automatically can make a completed workshop appear
- * to be upcoming.
- */
-function extractDatesFromText(text: string): string[] {
+function extractDates(text: string): {
+  dates: string[];
+  hasYearlessDate: boolean;
+} {
   const normalized = text.replace(/[–—‑]/g, "-");
+  const currentYear = Number(getTodayInIndia().slice(0, 4));
 
-  const dates = new Set<string>();
-
-  const monthMap: Record<string, string> = {
-    january: "01",
-    jan: "01",
-    february: "02",
-    feb: "02",
-    march: "03",
-    mar: "03",
-    april: "04",
-    apr: "04",
-    may: "05",
-    june: "06",
-    jun: "06",
-    july: "07",
-    jul: "07",
-    august: "08",
-    aug: "08",
-    september: "09",
-    sep: "09",
-    sept: "09",
-    october: "10",
-    oct: "10",
-    november: "11",
-    nov: "11",
-    december: "12",
-    dec: "12",
+  const monthMap: Record<string, number> = {
+    january: 1, jan: 1,
+    february: 2, feb: 2,
+    march: 3, mar: 3,
+    april: 4, apr: 4,
+    may: 5,
+    june: 6, jun: 6,
+    july: 7, jul: 7,
+    august: 8, aug: 8,
+    september: 9, sep: 9, sept: 9,
+    october: 10, oct: 10,
+    november: 11, nov: 11,
+    december: 12, dec: 12,
   };
 
+  const dates = new Set<string>();
+  let hasYearlessDate = false;
+
   const monthPattern =
-    /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\s+(\d{1,2})(?:st|nd|rd|th)?[,]?\s+(20\d{2})\b/gi;
+    /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(20\d{2}))?\b/gi;
 
   let match: RegExpExecArray | null;
 
   while ((match = monthPattern.exec(normalized)) !== null) {
     const month = monthMap[match[1].toLowerCase()];
-    const day = match[2].padStart(2, "0");
-    const year = match[3];
+    const day = Number(match[2]);
+    const explicitYear = match[3] ? Number(match[3]) : null;
 
-    const value = `${year}-${month}-${day}`;
+    if (!explicitYear) hasYearlessDate = true;
 
-    if (isValidISODate(value)) {
-      dates.add(value);
-    }
+    // A yearless date belongs to the current year.
+    // Never roll a past date forward into the next year.
+    const date = parseDate(explicitYear ?? currentYear, month, day);
+
+    if (date) dates.add(date);
   }
 
-  const isoPattern =
-    /\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/g;
+  const isoPattern = /\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/g;
 
   while ((match = isoPattern.exec(normalized)) !== null) {
-    const value =
-      `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
-
-    if (isValidISODate(value)) {
-      dates.add(value);
-    }
-  }
-
-  const dayFirstPattern =
-    /\b(\d{1,2})[/-](\d{1,2})[/-](20\d{2})\b/g;
-
-  while ((match = dayFirstPattern.exec(normalized)) !== null) {
-    const value =
-      `${match[3]}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}`;
-
-    if (isValidISODate(value)) {
-      dates.add(value);
-    }
-  }
-
-  return Array.from(dates).sort();
-}
-
-/**
- * Extract dates from event-specific date fields rather than scanning
- * every date on a page. This helps avoid using unrelated dates,
- * publication dates, or general website dates as event dates.
- */
-function extractEventDates(page: WebsitePage): string[] {
-  const dates = new Set<string>(page.structuredDates);
-
-  const lines = page.text
-    .split(/\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  const dateLabel =
-    /\b(date(?:s)?(?:\s*(?:&|and)\s*time)?|event date|when|starts on|start date|event schedule)\b/i;
-
-  for (let index = 0; index < lines.length; index++) {
-    if (!dateLabel.test(lines[index])) {
-      continue;
-    }
-
-    const context = [
-      lines[index],
-      lines[index + 1] || "",
-      lines[index + 2] || "",
-    ].join(" ");
-
-    for (const date of extractDatesFromText(context)) {
-      dates.add(date);
-    }
-  }
-
-  const flattened = page.text.replace(/\s+/g, " ");
-
-  const labelPattern =
-    /\b(?:date(?:s)?(?:\s*(?:&|and)\s*time)?|event date|starts on|start date)\b/gi;
-
-  let labelMatch: RegExpExecArray | null;
-
-  while ((labelMatch = labelPattern.exec(flattened)) !== null) {
-    const start = labelMatch.index;
-    const context = flattened.slice(start, start + 180);
-
-    for (const date of extractDatesFromText(context)) {
-      dates.add(date);
-    }
-  }
-
-  return Array.from(dates).sort();
-}
-
-/* ============================================================
-   EVENT STATUS CLASSIFICATION
-============================================================ */
-
-function getEventStatus(
-  page: WebsitePage,
-  dates: string[]
-): {
-  status: EventRecord["status"];
-  reason: string;
-} {
-  const text = page.text.toLowerCase();
-  const today = getTodayInIndia();
-
-  const explicitlyPast =
-    /\b(expired|completed|past event|past experience|event has ended|event concluded|registration closed|registrations closed|workshop has ended|session has ended)\b/i.test(
-      text
+    const date = parseDate(
+      Number(match[1]),
+      Number(match[2]),
+      Number(match[3])
     );
 
-  if (explicitlyPast) {
-    return {
-      status: "past",
-      reason:
-        "The event page explicitly indicates that the event has ended or registration is closed.",
-    };
+    if (date) dates.add(date);
   }
 
-  if (dates.length === 0) {
-    return {
-      status: "unknown",
-      reason:
-        "No reliable event-specific date with an explicit year was found.",
-    };
-  }
+  const dayFirstPattern = /\b(\d{1,2})[-/](\d{1,2})[-/](20\d{2})\b/g;
 
-  const futureDates = dates.filter(
-    (date) => date >= today
-  );
+  while ((match = dayFirstPattern.exec(normalized)) !== null) {
+    const date = parseDate(
+      Number(match[3]),
+      Number(match[2]),
+      Number(match[1])
+    );
 
-  if (futureDates.length > 0) {
-    return {
-      status: "upcoming",
-      reason:
-        `An event-specific date on or after today (${today}) was found.`,
-    };
+    if (date) dates.add(date);
   }
 
   return {
-    status: "past",
-    reason:
-      `All extracted event-specific dates are before today (${today}).`,
+    dates: Array.from(dates).sort(),
+    hasYearlessDate,
   };
 }
 
-/* ============================================================
-   EVENT DETAIL EXTRACTION
-============================================================ */
-
 function extractLocation(text: string): string {
   const patterns = [
-    /\bLocation\s*[:\-]?\s*([\s\S]{0,180}?)(?:Date\s*&?\s*Time|Reserve Your Spot|Register|Facilitators?:|$)/i,
-
-    /\bVenue\s*[:\-]?\s*([\s\S]{0,180}?)(?:Date\s*&?\s*Time|Reserve Your Spot|Register|Facilitators?:|$)/i,
-
-    /\bWhere it is\s*[:\-]?\s*([\s\S]{0,180}?)(?:Date\s*&?\s*Time|Reserve Your Spot|Register|Facilitators?:|$)/i,
+    /Location\s*([\s\S]{0,180}?)(?:Date\s*&?\s*Time|Reserve Your Spot|Register|Facilitators?:|$)/i,
+    /Where it is\s*([\s\S]{0,180}?)(?:Date\s*&?\s*Time|Reserve Your Spot|Register|Facilitators?:|$)/i,
   ];
 
   for (const pattern of patterns) {
@@ -2344,12 +1982,14 @@ function extractLocation(text: string): string {
     }
   }
 
+  if (/\bvirtual\b|\bonline\b/i.test(text)) {
+    return "Virtual (Online)";
+  }
+
   return "";
 }
 
-function extractRegistrationLinks(
-  page: WebsitePage
-): string[] {
+function extractRegistrationLinks(page: WebsitePage): string[] {
   const registrationWords =
     /\b(register|registration|reserve|book|tickets?|sign up|enrol|enroll|rsvp|join now)\b/i;
 
@@ -2362,21 +2002,59 @@ function extractRegistrationLinks(
   ).slice(0, 20);
 }
 
-function createEventRecord(
-  page: WebsitePage
-): EventRecord {
-  const dates = extractEventDates(page);
+function getEventStatus(
+  page: WebsitePage,
+  dates: string[]
+): {
+  status: EventRecord["status"];
+  reason: string;
+} {
+  const text = page.text.toLowerCase();
+  const today = getTodayInIndia();
 
-  const statusResult = getEventStatus(
-    page,
-    dates
-  );
+  const explicitlyPast =
+    /\b(expired|completed|past event|past experience|event has ended|this event has ended|registration closed|registrations closed)\b/i.test(
+      text
+    );
+
+  if (explicitlyPast) {
+    return {
+      status: "past",
+      reason: "The event page explicitly indicates that the event has ended or registration is closed.",
+    };
+  }
+
+  if (dates.length > 0) {
+    const futureDates = dates.filter((date) => date >= today);
+
+    if (futureDates.length > 0) {
+      return {
+        status: "upcoming",
+        reason: `The event page contains a date on or after today (${today}).`,
+      };
+    }
+
+    return {
+      status: "past",
+      reason: `All extracted event dates are before today (${today}).`,
+    };
+  }
+
+  return {
+    status: "unknown",
+    reason: "No reliable event date could be extracted.",
+  };
+}
+
+function createEventRecord(page: WebsitePage): EventRecord {
+  const dateResult = extractDates(page.text);
+  const statusResult = getEventStatus(page, dateResult.dates);
 
   return {
     title: page.title || "Untitled Zuva Life experience",
     url: page.url,
     status: statusResult.status,
-    dates,
+    dates: dateResult.dates,
     location: extractLocation(page.text),
     registrationLinks: extractRegistrationLinks(page),
     reason: statusResult.reason,
@@ -2384,80 +2062,127 @@ function createEventRecord(
   };
 }
 
-/* ============================================================
-   CRAWLER DISCOVERY
-============================================================ */
+function isLikelyEventPage(page: WebsitePage): boolean {
+  const path = new URL(page.url).pathname.toLowerCase();
 
-async function crawlZuvaWebsite(
-  query: string
-): Promise<CrawlResult> {
-  console.log(
-    "[Milo website reader] Starting fresh website discovery."
+  if (
+    path === "/" ||
+    path === "/our-experiences" ||
+    path === "/about" ||
+    path === "/privacy-policy" ||
+    path === "/terms-and-conditions"
+  ) {
+    return false;
+  }
+
+  const combined =
+    `${page.url} ${page.title} ${page.text}`.toLowerCase();
+
+  const signals = [
+    "event",
+    "experience",
+    "retreat",
+    "workshop",
+    "register here",
+    "register now",
+    "reserve your spot",
+    "date & time",
+    "who is it for",
+    "facilitator",
+  ];
+
+  const matches = signals.filter((signal) =>
+    combined.includes(signal)
+  ).length;
+
+  return (
+    /event|experience|workshop|retreat|zest|midlife/.test(path) ||
+    matches >= 2
   );
+}
 
+function sortUrlsByRelevance(urls: string[], query: string): string[] {
+  const terms = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((term) => term.length > 2);
+
+  return [...new Set(urls)]
+    .map((url) => {
+      const pathname = new URL(url).pathname.toLowerCase();
+      let score = 0;
+
+      if (pathname === "/our-experiences") score += 100;
+      if (pathname.includes("event")) score += 30;
+      if (pathname.includes("experience")) score += 25;
+      if (pathname.includes("workshop")) score += 25;
+      if (pathname.includes("retreat")) score += 25;
+      if (pathname.includes("midlife")) score += 15;
+
+      for (const term of terms) {
+        if (pathname.includes(term)) score += 5;
+      }
+
+      return { url, score };
+    })
+    .sort((a, b) => b.score - a.score)
+    .map((item) => item.url);
+}
+
+async function discoverWebsitePages(
+  query: string
+): Promise<WebsitePage[]> {
   const seedUrls = [
     `${ZUVA_BASE_URL}/`,
     `${ZUVA_BASE_URL}/our-experiences`,
     `${ZUVA_BASE_URL}/spark-experiences`,
     `${ZUVA_BASE_URL}/zest-circle`,
+    ...KNOWN_UPCOMING_EVENT_URLS,
   ];
 
-  const homepage = await fetchPage(
-    `${ZUVA_BASE_URL}/`
-  );
+  const normalizedSeeds = seedUrls
+    .map(normalizeInternalUrl)
+    .filter((url): url is string => Boolean(url));
 
-  const experiencesPage = await fetchPage(
-    `${ZUVA_BASE_URL}/our-experiences`
-  );
-
-  const discoveredUrls = new Set<string>(seedUrls);
-
-  for (const page of [homepage, experiencesPage]) {
-    if (!page) continue;
-
-    for (const link of page.links) {
-      const internalUrl = normalizeInternalUrl(link.url);
-
-      if (internalUrl) {
-        discoveredUrls.add(internalUrl);
-      }
-    }
-  }
-
-  const firstLevelUrls = sortUrlsByRelevance(
-    Array.from(discoveredUrls).filter(
-      (url) =>
-        url !== `${ZUVA_BASE_URL}/` &&
-        url !== `${ZUVA_BASE_URL}/our-experiences`
-    ),
-    query
-  ).slice(0, MAX_CRAWL_PAGES);
-
-  const firstLevelPages = await fetchPagesInBatches(
-    firstLevelUrls,
+  const seedPages = await fetchPagesInBatches(
+    Array.from(new Set(normalizedSeeds)),
     6
   );
 
-  const firstPassPages = [
-    ...(homepage ? [homepage] : []),
-    ...(experiencesPage ? [experiencesPage] : []),
-    ...firstLevelPages,
-  ];
+  const discoveredUrls = new Set<string>();
 
-  const existingUrls = new Set(
-    firstPassPages.map((page) => page.url)
+  for (const page of seedPages) {
+    for (const link of page.links) {
+      if (link.isExternal) continue;
+
+      const internalUrl = normalizeInternalUrl(link.url);
+      if (internalUrl) discoveredUrls.add(internalUrl);
+    }
+  }
+
+  const existingUrls = new Set(seedPages.map((page) => page.url));
+
+  const firstLevelUrls = sortUrlsByRelevance(
+    Array.from(discoveredUrls).filter((url) => !existingUrls.has(url)),
+    query
+  ).slice(0, MAX_CRAWL_PAGES - seedPages.length);
+
+  const firstLevelPages = await fetchPagesInBatches(firstLevelUrls, 6);
+
+  const allFirstPassPages = [...seedPages, ...firstLevelPages];
+  const allExistingUrls = new Set(
+    allFirstPassPages.map((page) => page.url)
   );
 
   const secondLevelUrls = new Set<string>();
 
-  for (const page of firstPassPages) {
+  for (const page of allFirstPassPages) {
     for (const link of page.links) {
+      if (link.isExternal) continue;
+
       const internalUrl = normalizeInternalUrl(link.url);
 
-      if (
-        internalUrl &&
-        !existingUrls.has(internalUrl)
-      ) {
+      if (internalUrl && !allExistingUrls.has(internalUrl)) {
         secondLevelUrls.add(internalUrl);
       }
     }
@@ -2468,36 +2193,38 @@ async function crawlZuvaWebsite(
     query
   ).slice(
     0,
-    Math.max(0, MAX_CRAWL_PAGES - firstPassPages.length)
+    Math.max(0, MAX_CRAWL_PAGES - allFirstPassPages.length)
   );
 
-  const secondPassPages = await fetchPagesInBatches(
-    remainingUrls,
-    6
-  );
+  const secondLevelPages = await fetchPagesInBatches(remainingUrls, 6);
 
   const allPages = [
-    ...firstPassPages,
-    ...secondPassPages,
+    ...allFirstPassPages,
+    ...secondLevelPages,
   ];
 
-  const uniquePages = Array.from(
-    new Map(
-      allPages.map((page) => [page.url, page])
-    ).values()
+  return Array.from(
+    new Map(allPages.map((page) => [page.url, page])).values()
+  );
+}
+
+/**
+ * Deterministic event retrieval.
+ * The known current event is fetched directly, not dependent on
+ * the crawler discovering its URL through navigation links.
+ */
+export async function getUpcomingZuvaEvents(
+  _query = "upcoming workshops"
+): Promise<EventRecord[]> {
+  console.log("[Milo website reader] Starting deterministic event retrieval.");
+
+  const eventUrls = Array.from(
+    new Set([
+      ...KNOWN_UPCOMING_EVENT_URLS,
+    ])
   );
 
-  console.log(
-    `[Milo website reader] Pages fetched: ${uniquePages.length}`
-  );
-
-  /* ============================================================
-     EVENT DISCOVERY AND VALIDATION
-  ============================================================ */
-
-  const eventPages = uniquePages.filter(
-    isLikelyEventPage
-  );
+  const eventPages = await fetchPagesInBatches(eventUrls, 4);
 
   const records = eventPages.map(createEventRecord);
 
@@ -2505,27 +2232,87 @@ async function crawlZuvaWebsite(
     (record) => record.status === "upcoming"
   );
 
-  const unknownRecords = records.filter(
-    (record) => record.status === "unknown"
-  );
-
-  const pastRecords = records.filter(
-    (record) => record.status === "past"
-  );
-
   console.log(
-    `[Milo website reader] Event results — candidates: ${records.length}, upcoming: ${upcomingRecords.length}, unknown: ${unknownRecords.length}, past: ${pastRecords.length}`
+    `[Milo website reader] Event results — candidates: ${records.length}, upcoming: ${upcomingRecords.length}, unknown: ${records.filter((r) => r.status === "unknown").length}, past: ${records.filter((r) => r.status === "past").length}`
   );
 
   for (const record of records) {
     console.log(
-      `[Milo website reader] Event: "${record.title}" | ${record.status} | Dates: ${record.dates.join(", ") || "None"} | URL: ${record.url}`
+      `[Milo website reader] Event: "${record.title}" | ${record.status} | Dates: ${record.dates.join(", ") || "none"} | URL: ${record.url} | Reason: ${record.reason}`
     );
   }
 
-  /* ============================================================
-     GENERAL WEBSITE CONTEXT
-  ============================================================ */
+  return upcomingRecords;
+}
+
+async function crawlZuvaWebsite(
+  query: string,
+  currentEventQuery: boolean
+): Promise<string> {
+  const uniquePages = await discoverWebsitePages(query);
+
+  console.log(
+    `[Milo website reader] Pages fetched: ${uniquePages.length}`
+  );
+
+  if (currentEventQuery) {
+    const eventPages = uniquePages.filter(isLikelyEventPage);
+    const records = eventPages.map(createEventRecord);
+
+    const upcomingRecords = records.filter(
+      (record) => record.status === "upcoming"
+    );
+
+    const unknownRecords = records.filter(
+      (record) => record.status === "unknown"
+    );
+
+    const pastRecords = records.filter(
+      (record) => record.status === "past"
+    );
+
+    console.log(
+      `[Milo website reader] Event results — candidates: ${records.length}, upcoming: ${upcomingRecords.length}, unknown: ${unknownRecords.length}, past: ${pastRecords.length}`
+    );
+
+    const formatRecord = (record: EventRecord) =>
+      [
+        `TITLE: ${record.title}`,
+        `EVENT PAGE URL: ${record.url}`,
+        `DATES: ${record.dates.join(", ") || "No reliable date extracted"}`,
+        `LOCATION: ${record.location || "Not specified"}`,
+        `REGISTRATION LINKS: ${record.registrationLinks.join(", ") || "Not found"}`,
+        `STATUS REASON: ${record.reason}`,
+        `PAGE DETAILS: ${record.description}`,
+      ].join("\n");
+
+    return [
+      "LIVE ZUVA LIFE EVENT RESULTS",
+      `TODAY IN INDIA: ${getTodayInIndia()}`,
+      "",
+      "EVENT VALIDATION RULES:",
+      "- Only events with verified dates today or in the future can be presented as upcoming.",
+      "- Past dates must never be changed into future dates.",
+      "- Registration buttons do not prove that an event is upcoming.",
+      "- Unknown-status events must not be presented as confirmed upcoming events.",
+      "- Never invent dates, prices, venues or registration links.",
+      "",
+      "VERIFIED UPCOMING EVENTS:",
+      ...(upcomingRecords.length
+        ? upcomingRecords.map(formatRecord)
+        : ["No events could be verified as upcoming."]),
+      "",
+      "UNKNOWN EVENTS — DO NOT PRESENT AS UPCOMING:",
+      ...(unknownRecords.length
+        ? unknownRecords.map(formatRecord)
+        : ["None."]),
+      "",
+      "PAST EVENTS — DO NOT PRESENT AS UPCOMING:",
+      ...(pastRecords.length
+        ? pastRecords.map(formatRecord)
+        : ["None identified."]),
+    ].join("\n\n").slice(0, 65000);
+  }
 
   const relevantPages = uniquePages
     .filter((page) => {
@@ -2542,180 +2329,98 @@ async function crawlZuvaWebsite(
     })
     .slice(0, 12);
 
-  const generalContext = [
-    "LIVE ZUVA LIFE WEBSITE INFORMATION",
+  if (relevantPages.length === 0) return "";
 
+  return [
+    "LIVE ZUVA LIFE WEBSITE INFORMATION",
     ...relevantPages.map((page) =>
       [
         `SOURCE URL: ${page.url}`,
         `PAGE TITLE: ${page.title || "Zuva Life website page"}`,
-        page.text.slice(0, 12000),
+        page.text.slice(0, MAX_PAGE_LENGTH),
       ].join("\n")
     ),
-  ]
-    .join("\n\n------------------------------\n\n")
-    .slice(0, 65000);
-
-  /* ============================================================
-     EVENT CONTEXT
-  ============================================================ */
-
-  const eventContext = [
-    "LIVE ZUVA LIFE EVENT RESULTS",
-    `TODAY IN INDIA: ${getTodayInIndia()}`,
-    `PAGES FETCHED: ${uniquePages.length}`,
-    `EVENT CANDIDATES: ${records.length}`,
-
-    "",
-    "STRICT EVENT VALIDATION RULES:",
-    "- Only events with verified event-specific future dates can be presented as upcoming.",
-    "- Past dates must never be presented as upcoming.",
-    "- Registration buttons do not prove that an event is upcoming.",
-    "- Unknown-status events must not be presented as confirmed upcoming events.",
-    "- Never invent event dates, prices, venues or registration links.",
-    "- Preserve exact event page URLs and registration URLs.",
-
-    "",
-    "VERIFIED UPCOMING EVENTS:",
-
-    ...(upcomingRecords.length
-      ? upcomingRecords.map((record) =>
-          [
-            `TITLE: ${record.title}`,
-            `EVENT PAGE URL: ${record.url}`,
-            `DATES: ${record.dates.join(", ")}`,
-            `LOCATION: ${record.location || "Not specified"}`,
-            `REGISTRATION LINKS: ${record.registrationLinks.join(", ") || "Not found"}`,
-            `STATUS REASON: ${record.reason}`,
-            `PAGE DETAILS: ${record.description}`,
-          ].join("\n")
-        )
-      : [
-          "No events could be verified as upcoming from the fetched event pages.",
-        ]),
-
-    "",
-    "EVENTS WITH UNKNOWN STATUS — DO NOT PRESENT AS UPCOMING:",
-
-    ...(unknownRecords.length
-      ? unknownRecords.map((record) =>
-          [
-            `TITLE: ${record.title}`,
-            `EVENT PAGE URL: ${record.url}`,
-            `DATES: ${record.dates.join(", ") || "No reliable date extracted"}`,
-            `REGISTRATION LINKS: ${record.registrationLinks.join(", ") || "Not found"}`,
-            `REASON: ${record.reason}`,
-          ].join("\n")
-        )
-      : ["None."]),
-
-    "",
-    "PAST EVENTS — DO NOT PRESENT AS UPCOMING:",
-
-    ...(pastRecords.length
-      ? pastRecords.map(
-          (record) =>
-            `${record.title} | ${record.url} | ${record.dates.join(", ") || "No date"}`
-        )
-      : ["None identified."]),
-  ].join("\n\n");
-
-  return {
-    content: eventContext.slice(0, 65000),
-    events: records,
-  };
+  ].join("\n\n------------------------------\n\n").slice(0, 65000);
 }
 
-/* ============================================================
-   CACHE AND DATA RETRIEVAL
-============================================================ */
+export function shouldUseLiveWebsite(query: string): boolean {
+  const normalizedQuery = query.toLowerCase().trim();
 
-async function getWebsiteData(
-  query: string
-): Promise<WebsiteCache> {
-  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return false;
 
   if (
-    websiteCache &&
-    websiteCache.query === normalizedQuery &&
-    Date.now() - websiteCache.fetchedAt < CACHE_TTL_MS
-  ) {
-    console.log(
-      "[Milo website reader] Using cached website context."
-    );
-
-    return websiteCache;
-  }
-
-  const result = await crawlZuvaWebsite(query);
-
-  websiteCache = {
-    query: normalizedQuery,
-    content: result.content,
-    events: result.events,
-    fetchedAt: Date.now(),
-  };
-
-  return websiteCache;
-}
-
-/* ============================================================
-   PUBLIC EVENT RETRIEVAL
-============================================================ */
-
-/**
- * Returns only events classified as upcoming.
- *
- * This function is intended for current-event questions in the
- * chat API. The stable knowledge base must not override its result.
- */
-export async function getUpcomingZuvaEvents(
-  query: string
-): Promise<EventRecord[]> {
-  if (!isCurrentEventQuery(query)) {
-    return [];
-  }
-
-  console.log(
-    `[Milo website reader] Retrieving verified upcoming events for: "${query}"`
-  );
-
-  const data = await getWebsiteData(query);
-
-  return data.events
-    .filter(
-      (event) => event.status === "upcoming"
+    STABLE_QUERY_PATTERNS.some((pattern) =>
+      pattern.test(normalizedQuery)
     )
-    .map((event) => ({ ...event }));
+  ) {
+    return false;
+  }
+
+  if (
+    CURRENT_EVENT_PATTERNS.some((pattern) =>
+      pattern.test(normalizedQuery)
+    )
+  ) {
+    return true;
+  }
+
+  return LIVE_QUERY_PATTERNS.some((pattern) =>
+    pattern.test(normalizedQuery)
+  );
 }
 
-/* ============================================================
-   PUBLIC LIVE WEBSITE READER
-============================================================ */
+export function isCurrentEventQuery(query: string): boolean {
+  const normalizedQuery = query.toLowerCase().trim();
+
+  if (!normalizedQuery) return false;
+
+  return CURRENT_EVENT_PATTERNS.some((pattern) =>
+    pattern.test(normalizedQuery)
+  );
+}
 
 export async function readLiveZuvaWebsite(
   query: string
 ): Promise<string> {
-  if (!shouldUseLiveWebsite(query)) {
-    return "";
+  if (!shouldUseLiveWebsite(query)) return "";
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const currentEventQuery = isCurrentEventQuery(query);
+
+  if (
+    websiteCache &&
+    websiteCache.query === normalizedQuery &&
+    Date.now() - websiteCache.fetchedAt < CACHE_TTL_MS &&
+    websiteCache.content
+  ) {
+    console.log("[Milo website reader] Using cached website context.");
+    return websiteCache.content;
   }
 
   try {
-    const data = await getWebsiteData(query);
+    const websiteContext = await crawlZuvaWebsite(
+      query,
+      currentEventQuery
+    );
 
-    if (!data.content) {
+    if (!websiteContext) {
       console.warn(
         "[Milo website reader] No useful website context was retrieved."
       );
-
       return "";
     }
+
+    websiteCache = {
+      query: normalizedQuery,
+      content: websiteContext,
+      fetchedAt: Date.now(),
+    };
 
     console.log(
       "[Milo website reader] Website context successfully built."
     );
 
-    return data.content;
+    return websiteContext;
   } catch (error) {
     console.error(
       "[Milo website reader] Website crawl failed:",
@@ -2725,5 +2430,4 @@ export async function readLiveZuvaWebsite(
     return "";
   }
 }
-
 
